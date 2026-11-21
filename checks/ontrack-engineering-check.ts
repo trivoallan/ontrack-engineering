@@ -777,14 +777,17 @@ function denies(root: string, name: string, commands: string[]): boolean {
 // locally, whether gh is signed in would decide the result.
 type PullRequestRule = { required_approving_review_count?: number; dismiss_stale_reviews_on_push?: boolean; require_last_push_approval?: boolean };
 
-function ruleset(root: string, name: string, by: string, approvals: number): boolean {
+// The rules GitHub applies to the default branch, read in CI only (null outside it):
+// locally, whether gh is signed in would decide the result.
+type Rule = { type?: string; parameters?: Record<string, unknown> };
+
+function branchRules(root: string, number: string, name: string): { branch: string; rules: Rule[] } | null {
   if (process.env.GITHUB_ACTIONS !== 'true') {
-    console.log('ADR-0022: ruleset not read outside CI');
-    return true;
+    console.log(`${number}: ruleset not read outside CI`);
+    return null;
   }
-  const fail = (msg: string) => { console.error(`${name}, but ${msg}`); return false; };
   const repo = process.env.GITHUB_REPOSITORY;
-  if (!repo) return fail('GITHUB_REPOSITORY is not set, so the ruleset cannot be read');
+  if (!repo) throw new CheckError(`${name}, but GITHUB_REPOSITORY is not set, so the ruleset cannot be read`);
   const gh = (...args: string[]) => {
     const r = spawnSync('gh', ['api', ...args], { cwd: root, encoding: 'utf8' });
     if ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') throw new CheckError(`${name}, but gh is not installed, so the ruleset cannot be read`);
@@ -799,11 +802,26 @@ function ruleset(root: string, name: string, by: string, approvals: number): boo
     rules = JSON.parse(gh(`repos/${repo}/rules/branches/${branch}`));
   } catch (e) {
     if (e instanceof CheckError) throw e;
-    return fail(`gh api returned rules that are not JSON`);
+    throw new CheckError(`${name}, but gh api returned rules that are not JSON`);
   }
+  return { branch, rules: Array.isArray(rules) ? rules : [] };
+}
+
+function ruleset(root: string, name: string, by: string, approvals: number): boolean {
+  const fail = (msg: string) => { console.error(`${name}, but ${msg}`); return false; };
+  let read: ReturnType<typeof branchRules>;
+  try {
+    read = branchRules(root, 'ADR-0022', name);
+  } catch (e) {
+    if (!(e instanceof CheckError) || !/GITHUB_REPOSITORY|not JSON/.test(e.message)) throw e;
+    console.error(e.message);
+    return false;
+  }
+  if (read === null) return true;
+  const { branch, rules } = read;
   console.log('ADR-0022: the ruleset\'s bypass list is not verified (reading it needs admin rights)');
   // Several rulesets may each add a pull_request rule: GitHub applies the strictest of each setting.
-  const prs = (Array.isArray(rules) ? rules : [])
+  const prs = rules
     .filter((r) => r?.type === 'pull_request')
     .map((r) => (r.parameters ?? {}) as PullRequestRule);
   if (!prs.length) return fail(`no ruleset requires a pull request on ${branch}`);
@@ -878,39 +896,112 @@ function license(root: string, file: string): number {
 // ponytail: an open value, as secrets.guard; only zizmor has something to run.
 const forgeGate = wiring('ADR-0011', [{ group: 'forge', key: 'gate', row: byValue({ blocking: gate, informative: gate }) }]);
 const ForgeAudit = z.object({ audit: one() });
+const ForgeIntegration = z.object({ integration: z.enum(['queue', 'up-to-date', 'none']) });
 
 function forge(root: string, file: string, opts: Options): number {
   let failed = forgeGate(root, file, opts) !== 0;
+  const text = readFileSync(file, 'utf8');
   // Revision 4 moved the key to ADR-0022; a leftover still reads as a ruling to an agent.
-  if (readTraits(readFileSync(file, 'utf8'), 'forge')?.review !== undefined) {
+  if (readTraits(text, 'forge')?.review !== undefined) {
     console.error('ADR-0011: forge.review moved to ADR-0022 review.by; rule on it there and remove it here');
     failed = true;
   }
-  let audit: string;
-  try {
-    ({ audit } = traitsOf(ForgeAudit, 'ADR-0011', 'forge', file, readFileSync(file, 'utf8')));
-  } catch (e) {
-    if (!(e instanceof CheckError)) throw e;
-    console.error(e.message);
-    return 1;
-  }
+  // Each key reports, whatever the others did.
+  const read = <S extends z.ZodObject>(schema: S): z.infer<S> | null => {
+    try {
+      return traitsOf(schema, 'ADR-0011', 'forge', file, text);
+    } catch (e) {
+      if (!(e instanceof CheckError)) throw e;
+      console.error(e.message);
+      failed = true;
+      return null;
+    }
+  };
+  const audit = read(ForgeAudit)?.audit;
+  if (audit !== undefined && !forgeAudit(root, audit)) failed = true;
+  const integration = read(ForgeIntegration)?.integration;
+  if (integration !== undefined && !forgeIntegration(root, text, integration)) failed = true;
+  return failed ? 1 : 0;
+}
+
+function forgeAudit(root: string, audit: string): boolean {
   const name = `ADR-0011: forge.audit is ${audit}`;
   if (audit !== 'zizmor') {
     console.log(`${name}, nothing to check`);
-    return failed ? 1 : 0;
+    return true;
   }
   const workflows = matching(tracked(root), WORKFLOWS);
   if (!workflows.length) {
     console.log(`${name}, but no workflow is committed, nothing to audit`);
-    return failed ? 1 : 0;
+    return true;
   }
   runTool(root, 'zizmor', ['--version'], name);
   // --no-config: a repository's zizmor.yml cannot loosen the result; inline ignores still apply.
   if (runTool(root, 'zizmor', ['--offline', '--no-config', '--no-progress', ...workflows], name) !== 0) {
     console.error(`${name}, and zizmor reported findings no inline ignore covers`);
-    failed = true;
+    return false;
   }
-  return failed ? 1 : 0;
+  return true;
+}
+
+// ADR-0011 forge.integration: the triggers in the repository, then, in CI, the default branch's rules.
+const SCANS = /^\s*-?\s*uses:\s*["']?github\/codeql-action\/(analyze|upload-sarif)@/m;
+const MERGE_METHOD: Record<string, string> = { squash: 'SQUASH', 'merge-commit': 'MERGE', rebase: 'REBASE' };
+
+function forgeIntegration(root: string, adr: string, integration: string): boolean {
+  const name = `ADR-0011: forge.integration is ${integration}`;
+  const fail = (msg: string) => { console.error(`${name}, but ${msg}`); return false; };
+  const gateValue = readTraits(adr, 'forge')?.gate;
+  if (integration !== 'none' && gateValue !== 'blocking') return fail(`${integration} requires forge.gate: blocking, and forge.gate is ${gateValue || 'not set'}`);
+  const workflows = matching(tracked(root), WORKFLOWS).map((f) => ({ f, text: readFileSync(join(root, f), 'utf8') }));
+  if (integration === 'none') {
+    if (gateValue === 'none') {
+      console.log(`${name}, and forge.gate is none: no pipeline, nothing to check`);
+      return true;
+    }
+    const branch = defaultBranch(root);
+    const hit = workflows.find(({ text }) => covers(pushTrigger(text), 'push', branch));
+    if (!hit) return fail(`no committed workflow runs on a push to ${branch}, so a broken ${branch} would go unseen`);
+    console.log(`${name}, ${hit.f} runs on a push to ${branch}`);
+    return true;
+  }
+  let ok = true;
+  if (integration === 'queue') {
+    const queued = workflows.filter(({ text }) => onEvents(text).includes('merge_group'));
+    if (!queued.length) ok = fail('no committed workflow runs on merge_group, so the queue would wait for checks that never run');
+    for (const { f, text } of workflows) {
+      if (SCANS.test(text) && !onEvents(text).includes('merge_group')) ok = fail(`${f} uploads code scanning results and does not run on merge_group`);
+    }
+    if (ok) console.log(`${name}, ${queued.map(({ f }) => f).join(', ')} run(s) on merge_group`);
+  }
+  const rules = branchRules(root, 'ADR-0011', name);
+  if (rules === null) return ok;
+  if (integration === 'up-to-date') {
+    const checks = rules.rules.filter((r) => r?.type === 'required_status_checks');
+    if (!checks.length) return fail(`no ruleset requires status checks on ${rules.branch}`);
+    if (!checks.some((r) => r.parameters?.strict_required_status_checks_policy === true)) {
+      return fail(`the required status checks on ${rules.branch} are not strict, so a branch need not be up to date to merge`);
+    }
+    console.log(`${name}, the required status checks on ${rules.branch} are strict`);
+    return ok;
+  }
+  const queue = rules.rules.find((r) => r?.type === 'merge_queue')?.parameters as { merge_method?: string; grouping_strategy?: string } | undefined;
+  if (!queue) return fail(`no ruleset requires a merge queue on ${rules.branch}`);
+  const merge = toolRuling(root, 'ADR-0009', 'branching', 'merge');
+  const want = typeof merge.value === 'string' ? MERGE_METHOD[merge.value] : undefined;
+  if (!want) console.log(`ADR-0011: ${merge.why ?? (merge.found ? 'ADR-0009 branching.merge is not ruled' : 'no ADR-0009 in this repository')}, so the queue's merge method is not compared`);
+  else if (queue.merge_method !== want) ok = fail(`the merge queue on ${rules.branch} merges with ${queue.merge_method}, where branching.merge ${merge.value} needs ${want}`);
+  if (queue.grouping_strategy !== 'ALLGREEN') ok = fail(`the merge queue on ${rules.branch} groups with ${queue.grouping_strategy}, so a pull request whose own checks fail could land; use ALLGREEN`);
+  // A required check named after a committed job must run in the queue; one from another app is skipped.
+  const required = rules.rules.filter((r) => r?.type === 'required_status_checks')
+    .flatMap((r) => ((r.parameters?.required_status_checks ?? []) as { context?: string }[]).map((c) => c.context ?? ''));
+  for (const context of required) {
+    const from = workflows.find(({ text }) => jobNames(text).includes(context));
+    if (!from) console.log(`ADR-0011: required check ${context} comes from no committed job, not checked`);
+    else if (!onEvents(from.text).includes('merge_group')) ok = fail(`the required check ${context} comes from ${from.f}, which does not run on merge_group`);
+  }
+  if (ok) console.log(`${name}, the merge queue on ${rules.branch} uses ${queue.merge_method} and ALLGREEN`);
+  return ok;
 }
 
 // ADR-0025: the tools the repository's rulings name, and whether its manager pins them.
@@ -1002,19 +1093,62 @@ type Push = { push: boolean; branches?: string[]; tags?: string[] };
 // YAML (no anchors, no multi-line flow mappings, no globs matched against the
 // default branch). A form it misses reads as a missing trigger, never a pass;
 // switch to the `yaml` package if that bites (ADR-0020: a person admits it).
-function pushTrigger(text: string): Push {
+const indent = (l: string) => l.length - l.trimStart().length;
+const flow = (v: string) => v.startsWith('[') && v.endsWith(']') ? v.slice(1, -1).split(',').map(scalar).filter(Boolean) : null;
+
+// The lines under a top-level `key:` of a workflow, with the inline value when it has one.
+function topLevel(text: string, key: RegExp): { inline: string; block: string[] } | null {
   const lines = text.split(/\r?\n/).filter((l) => l.trim() && !l.trimStart().startsWith('#'));
-  const indent = (l: string) => l.length - l.trimStart().length;
-  const flow = (v: string) => v.startsWith('[') && v.endsWith(']') ? v.slice(1, -1).split(',').map(scalar).filter(Boolean) : null;
-  const o = lines.findIndex((l) => /^["']?on["']?:/.test(l));
-  if (o === -1) return { push: false };
-  const inline = scalar(lines[o].replace(/^["']?on["']?:/, ''));
-  if (inline) return { push: inline === 'push' || (flow(inline) ?? []).includes('push') };
+  const o = lines.findIndex((l) => key.test(l));
+  if (o === -1) return null;
   const block: string[] = [];
   for (const l of lines.slice(o + 1)) {
     if (indent(l) === 0) break;
     block.push(l);
   }
+  return { inline: scalar(lines[o].replace(key, '')), block };
+}
+
+const ON = /^["']?on["']?:/;
+
+// The events of a workflow's top-level `on:`: a scalar, a flow list, a block list or block keys.
+function onEvents(text: string): string[] {
+  const on = topLevel(text, ON);
+  if (!on) return [];
+  if (on.inline) return flow(on.inline) ?? [on.inline];
+  if (!on.block.length) return [];
+  const level = indent(on.block[0]);
+  return on.block.filter((l) => indent(l) === level).map((l) => {
+    const t = l.trim();
+    return scalar(t.startsWith('-') ? t.replace(/^-\s*/, '') : t.replace(/:.*$/, ''));
+  });
+}
+
+// The job ids under a workflow's top-level `jobs:`, and each job's literal `name:`.
+function jobNames(text: string): string[] {
+  const jobs = topLevel(text, /^["']?jobs["']?:/);
+  if (!jobs?.block.length) return [];
+  const level = indent(jobs.block[0]);
+  const names: string[] = [];
+  let inner = -1;
+  for (const l of jobs.block) {
+    if (indent(l) === level) {
+      names.push(scalar(l.trim().replace(/:.*$/, '')));
+      inner = -1;
+      continue;
+    }
+    if (inner === -1) inner = indent(l);
+    const n = indent(l) === inner && l.trim().match(/^name:\s*(.+)$/);
+    if (n) names.push(scalar(n[1]));
+  }
+  return names;
+}
+
+function pushTrigger(text: string): Push {
+  const on = topLevel(text, ON);
+  if (!on) return { push: false };
+  if (on.inline) return { push: on.inline === 'push' || (flow(on.inline) ?? []).includes('push') };
+  const block = on.block;
   if (!block.length) return { push: false };
   const level = indent(block[0]);
   if (block.some((l) => indent(l) === level && /^-\s*push$/.test(scalar(l.trim())))) return { push: true };

@@ -66,6 +66,7 @@ frontmatter:
     # ADR-0011
     - { name: "traits.forge.gate", enum: [blocking, informative, none], optional: true }
     - { name: "traits.forge.audit", type: string, optional: true }
+    - { name: "traits.forge.integration", enum: [queue, up-to-date, none], optional: true }
     # ADR-0012
     - { name: "traits.delivery.target", enum: [container, platform, package, none], optional: true }
     - { name: "traits.delivery.environments", type: array, optional: true }
