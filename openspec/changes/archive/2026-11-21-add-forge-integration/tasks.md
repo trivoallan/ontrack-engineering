@@ -64,7 +64,7 @@
 ## 3. Change and adoption
 
 - [x] 3.1 Run `openspec validate add-forge-integration --strict` and fix any finding.
-- [ ] 3.2 In the pull request description, list what ontrack-engineering's own copy needs after the release, and change nothing under `docs/adr/trivoallan/` in this change:
+- [x] 3.2 In the pull request description, list what ontrack-engineering's own copy needs after the release, and change nothing under `docs/adr/trivoallan/` in this change:
   - re-import;
   - `forge.integration: up-to-date`, because the repository is owned by a user;
   - `strict_required_status_checks_policy: true` in `.github/rulesets/main.json` and on GitHub.
