@@ -1,6 +1,6 @@
 {
   "name": "@trivoallan/ontrack-engineering",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Engineering conventions your repositories import as ADRs: commits, branching, delivery, supply chain, coding agents. Checked in CI.",
   "license": "MIT-0",
   "keywords": [

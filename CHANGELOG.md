@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.7.0](https://github.com/trivoallan/ontrack-engineering/compare/v0.6.0...v0.7.0) (2026-11-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **adr:** three messages of ontrack-engineering-check change. "answer it there and remove it here" becomes "rule on it there and remove it here", "answer them and remove review.merge_by" becomes "rule on them and remove review.merge_by", and "none is an answer only when" becomes "none is a valid value only when".
+
+### Features
+
+* **adr:** ask in ADR-0011 what is tested before a change lands ([#155](https://github.com/trivoallan/ontrack-engineering/issues/155)) ([05734af](https://github.com/trivoallan/ontrack-engineering/commit/05734af5285d44890cf332dc8196ef04ea789c86))
+* **adr:** say convention where the ADRs said question, and no longer name surdesrails ([#146](https://github.com/trivoallan/ontrack-engineering/issues/146)) ([59402af](https://github.com/trivoallan/ontrack-engineering/commit/59402af61489eb5c432c5515f6dc0b31fea7e1e3))
+
+
+### Bug Fixes
+
+* add the ontrack-tracks keyword so the track appears in npm search ([#143](https://github.com/trivoallan/ontrack-engineering/issues/143)) ([712917d](https://github.com/trivoallan/ontrack-engineering/commit/712917db8ba112d366ba8bafc3e39037c06b6064)), closes [#141](https://github.com/trivoallan/ontrack-engineering/issues/141)
+* name the track ontrack-engineering, not governance ([#139](https://github.com/trivoallan/ontrack-engineering/issues/139)) ([f56ac81](https://github.com/trivoallan/ontrack-engineering/commit/f56ac815295bca7cff9e4c2e2da01f4350bd6d19))
+
 ## [0.6.0](https://github.com/trivoallan/ontrack-engineering/compare/v0.5.1...v0.6.0) (2026-11-15)
 
 
