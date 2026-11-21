@@ -3,7 +3,7 @@ adr: ADR-0011
 slug: forge-and-ci
 title: Forge and continuous integration
 status: proposed
-revision: 4
+revision: 5
 date:
 authors: []
 supersedes: []
@@ -12,6 +12,7 @@ traits:
   forge:
     gate:
     audit:
+    integration:
 ---
 
 # Forge and continuous integration
@@ -55,6 +56,16 @@ whole workflow, while every action was correctly pinned. While
 `forge.audit` is empty, an agent does not know whether a tool will read
 what it wrote.
 
+**A green pull request is green against the base it ran on.** The
+pipeline tests a pull request merged with the default branch as it was
+when the run started. Two pull requests can each be green and leave the
+default branch red once both have merged, because neither ran on top of
+the other. GitHub lets a pull request merge without being up to date, so
+nothing tests what lands. This is common when several agent sessions open
+pull requests in parallel. While `forge.integration` is empty, an agent
+does not know whether to bring its branch up to date before saying it is
+green, or whether anything guards the default branch at all.
+
 What a pipeline runs on which branch follows from other ADRs: the branching
 model ([ADR-0009](ADR-0009-branching.md)), the delivery
 ([ADR-0012](ADR-0012-delivery.md)), the languages and tests
@@ -68,12 +79,28 @@ model ([ADR-0009](ADR-0009-branching.md)), the delivery
 | --- | --- | --- |
 | `forge.gate` | `blocking` | a check that prevents nothing is not a check, it is a report. Make it real with a ruleset that requires the pipeline's checks on the default branch |
 | `forge.audit` | `zizmor` | it reads workflows for what this ADR's rules forbid: a movable action reference, `pull_request_target`, a template expanded into `run:`, permissions wider than a job needs. actionlint checks that a workflow parses, not that it is safe |
+| `forge.integration` | `queue` when an organization owns the repository, `up-to-date` otherwise | either one makes the default branch hold exactly what a pipeline ran on. A queue does it without asking anyone to update a branch. GitHub offers merge queues only to public repositories owned by an organization, and to private ones on GitHub Enterprise Cloud, so a repository owned by a user rules `up-to-date` |
 
 `none` is how a repository says it has no pipeline at all: keep `traits:`
 and write `none`. `rejected` has one use only, a forge other than GitHub.
 
 Who reviews a change to this repository, and who merges it, is
 [ADR-0022](ADR-0022-review-and-merge.md)'s convention: `review.by`.
+
+`forge.integration` says what is tested before a pull request lands on
+the default branch:
+
+- `queue`: a merge queue tests each pull request on top of the ones ahead
+  of it, and merges it only when that run is green;
+- `up-to-date`: a pull request must contain the tip of the default branch
+  before it merges, so its own run is the one that counts;
+- `none`: nothing beyond the pull request's own run.
+
+`queue` and `up-to-date` require `forge.gate: blocking`: without a
+required check, there is nothing to integrate. `up-to-date` costs a new
+run of every open pull request each time one merges, and that cost grows
+with the number of pull requests open in parallel. A queue avoids it,
+which is why it is recommended wherever GitHub offers one.
 
 **What ontrack-engineering fixes, whatever you rule.** Five rules apply to every
 workflow job, not only to deployment:
@@ -110,6 +137,42 @@ workflow job, not only to deployment:
 3. **Every action is pinned by hash**, GitHub's own (`actions/*`)
    included. zizmor's default policy already requires it.
 
+**What ontrack-engineering fixes for each `forge.integration`:**
+
+- With `queue`:
+  1. **Every workflow that reports a check the default branch requires
+     also runs on `merge_group`**, and so does every workflow that uploads
+     code scanning results. A required check that never runs in the queue
+     blocks every merge.
+  2. **The default branch's ruleset holds a `merge_queue` rule** whose
+     `merge_method` follows [ADR-0009](ADR-0009-branching.md)'s
+     `branching.merge`: `squash` gives `SQUASH`, `merge-commit` gives
+     `MERGE`, and `rebase` gives `REBASE`. Its `grouping_strategy` is
+     `ALLGREEN`. With `HEADGREEN`, a pull request whose own checks fail
+     lands when the last one of its group passes, and `blocking` no longer
+     holds.
+  3. **The other parameters of the rule stay at GitHub's defaults.** These
+     are the group sizes, the concurrency and the timeouts. A repository
+     that changes them says so in its own ADR.
+  4. **`gh pr merge` adds a pull request to the queue.** ADR-0022's
+     `review.by` governs adding a pull request to the queue exactly as it
+     governs merging one: with `maintainer`, the agent does not do it.
+- With `up-to-date`:
+  1. **The default branch's required status checks are strict**
+     (`strict_required_status_checks_policy: true`).
+  2. **The agent may bring its own pull request's branch up to date.**
+     That is a push, not a merge. It then says when the checks are green
+     again, as ADR-0022 rule 1 asks.
+- With `none`, **a workflow runs on pushes to the default branch**. It
+  does not stop the default branch from breaking, but it shows the
+  breakage. With `forge.gate: none` there is no pipeline, and nothing to
+  run.
+
+What GitHub does not document: what the `code_scanning` rule evaluates
+inside a queue. Code scanning's own documentation asks for the
+`merge_group` trigger, which rule 1 for `queue` gives. ontrack-engineering
+has not observed the rule's behaviour in a queue.
+
 **Secrets are named, never given.** An agent produces the list of secret
 *names* a workflow needs; a person sets the values on GitHub. A token, a
 password or a kubeconfig never goes into a change, a commit or a reply to
@@ -119,6 +182,9 @@ the agent.
 silent bypass is not a departure.
 
 **Which jobs exist follows from other ADRs, not from the agent's judgement.**
+With `forge.integration: queue`, the `test`, `scan` and `audit` stages
+also run on `merge_group`. A merge group runs on a temporary branch, not
+on the default branch, so rule 1 keeps it from deploying.
 
 | Stage | Exists when | Its form comes from |
 | --- | --- | --- |
@@ -181,7 +247,7 @@ adr: ADR-0011
 slug: forge-and-ci
 title: Forge and continuous integration
 status: accepted
-revision: 4
+revision: 5
 date: 2026-11-15
 authors: [Your Name]
 supersedes: []
@@ -190,6 +256,7 @@ traits:
   forge:
     gate: blocking
     audit: zizmor
+    integration: up-to-date
 ---
 ```
 
@@ -208,6 +275,23 @@ runs it from your repository's root. It reads the keys you ruled:
   `tools.manager: mise`, from the `PATH` otherwise, never from
   `node_modules/.bin`, and prints the version it ran. The online audits run
   only in CI.
+- `forge.integration`: empty fails. `queue` or `up-to-date` without
+  `forge.gate: blocking` fails.
+  - With `queue`, at least one committed workflow runs on `merge_group`,
+    and so does every workflow that uses `github/codeql-action/analyze`
+    or `upload-sarif`.
+  - With `none` and a pipeline, at least one workflow runs on pushes to
+    the default branch.
+  - **In CI only**, it reads the default branch's rules through `gh api`,
+    as ADR-0022's check does. With `queue`, it reads the `merge_queue`
+    rule's merge method against `branching.merge` and its grouping. It
+    also checks that every required status check named after a committed
+    job comes from a workflow that runs on `merge_group`. With
+    `up-to-date`, it reads that the required status checks are strict.
+    Outside CI, it says it did not read the ruleset.
+  - It reads the triggers line by line, without a YAML parser. A
+    `merge_group` written in a form it does not read counts as absent,
+    and the message names the file.
 - `forge.review`, left from revision 3: the check fails and names
   ADR-0022's `review.by`, where the key moved.
 
@@ -223,6 +307,8 @@ what makes a decision different from an accepted default.
 
 - A red pipeline means the same thing to every agent and reviewer: with a
   required check, nothing merges on red.
+- With `queue` or `up-to-date`, the default branch holds what a pipeline
+  ran on, even when several agents merge in parallel.
 - The five rules close the common leaks: moved action tags, secrets in logs,
   deploys from feature branches, secrets handed to forks.
 - Which jobs exist is derived from the other ADRs, so two agents write the
@@ -232,6 +318,9 @@ what makes a decision different from an accepted default.
 
 - A flaky pipeline blocks everyone, and the pressure to bypass the check
   grows with it.
+- With `queue`, a required workflow without `merge_group` blocks every
+  merge. With `up-to-date`, every merge sends the other open pull requests
+  back through the pipeline.
 - Pinning actions by SHA makes updates a deliberate chore, unless a tool
   proposes them: [ADR-0018](ADR-0018-dependencies.md) decides which.
 - zizmor enforces rule 3 for actions and part of rule 5. Rules 1, 2 and 4,
@@ -244,6 +333,8 @@ what makes a decision different from an accepted default.
 
 - The ruleset that makes `blocking` real is a GitHub setting, outside the
   repository, and is not checked by anything here.
+- The ruleset that makes `forge.integration` real is read by the check in
+  CI only.
 
 ## Alternatives Considered
 
@@ -261,6 +352,25 @@ that is reported gets ignored.
 
 No pipeline; review is the only control. Tenable for a repository with no
 executable code.
+
+### `forge.integration: queue`
+
+The default branch holds only what a pipeline ran on, and nobody updates
+a branch by hand. Recommended wherever GitHub offers it. The cost is a
+`merge_group` trigger on every required workflow, and a queue that waits
+for its runs before it merges.
+
+### `forge.integration: up-to-date`
+
+The same guarantee, available to every repository. Each merge makes every
+other open pull request out of date, so with N pull requests in parallel,
+landing all of them costs on the order of N² runs instead of N.
+
+### `forge.integration: none`
+
+The cheapest option, and the default branch can turn red with no pull
+request at fault. Tenable when pull requests rarely overlap. The push
+workflow at least shows when it happens.
 
 ### `forge.audit: none`
 
@@ -295,6 +405,7 @@ from here; copy those you keep into your own ADR.
 - Suggested skills: `setup` from `actionlint@melodic-software`, to install and wire actionlint.
 - [ADR-0001](ADR-0001-record-architecture-decisions.md): how ontrack-engineering ADRs are ruled on.
 - [actionlint](https://github.com/rhysd/actionlint) and [act](https://github.com/nektos/act).
+- GitHub: [managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue), [rules for rulesets](https://docs.github.com/en/rest/repos/rules), [code scanning and `merge_group`](https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning). Read on 2026-11-21.
 - zizmor: [audits](https://docs.zizmor.sh/audits/), [usage and ignores](https://docs.zizmor.sh/usage/), [configuration](https://docs.zizmor.sh/configuration/), [zizmorcore/zizmor-action](https://github.com/zizmorcore/zizmor-action). Measured with zizmor 1.32.0 on 2026-11-15.
 
 **The key.**
@@ -303,6 +414,7 @@ from here; copy those you keep into your own ADR.
 | --- | --- | --- |
 | `forge.gate` | what a red pipeline prevents | `blocking` (nothing merges on red), `informative` (it reports, review decides), `none` (no pipeline) |
 | `forge.audit` | what reads the workflows for what the rules forbid | `zizmor`, another named tool, or `none` |
+| `forge.integration` | what is tested before a pull request lands on the default branch | `queue` (a merge queue), `up-to-date` (the branch must contain the default branch's tip), `none` (the pull request's own run only) |
 
 **Testing a workflow before pushing**, in three steps, cheapest first. Install
 `actionlint` and `act` as standalone binaries from their GitHub releases,
@@ -370,3 +482,4 @@ a repository that already ruled must rule on again.
 - Revision 2: a new key, `forge.audit` (`zizmor`, another tool or `none`, recommended `zizmor`), three rules for `zizmor`, and an `audit` stage. Rule on `forge.audit`; nothing else to rule on again.
 - Revision 3: a new key, `forge.review` (`peer`, `author` or `agent`, recommended `peer`), which says who can accept a change, and what `author` leaves beside each value of `forge.gate`. Rule on `forge.review`; nothing else to rule on again.
 - Revision 4: `forge.review` moves to [ADR-0022](ADR-0022-review-and-merge.md) as `review.by`, with what it leaves beside each value of `forge.gate`. Rule on `review.by` there, then delete `forge.review` from this file: the check fails while it remains.
+- Revision 5: a new key, `forge.integration` (`queue`, `up-to-date` or `none`; recommended `queue` when an organization owns the repository, `up-to-date` otherwise), and what each value fixes. Rule on `forge.integration`; nothing else to rule on again.

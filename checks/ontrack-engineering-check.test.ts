@@ -306,7 +306,7 @@ test('wiring: arc42 under another root', () => {
 });
 
 test('wiring: gate states its ceiling', () => {
-  const r = run(wired({ adrs: { 'ADR-0011-forge-and-ci.md': '  forge:\n    gate: blocking\n    audit: none' }, files: { '.github/workflows/ci.yml': 'on: push\n' } }), 'ADR-0011');
+  const r = run(wired({ adrs: { 'ADR-0011-forge-and-ci.md': '  forge:\n    gate: blocking\n    audit: none\n    integration: none' }, files: { '.github/workflows/ci.yml': 'on: push\n' } }), 'ADR-0011');
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /ruleset .* is not verified/);
 });
@@ -1409,8 +1409,8 @@ test('ADR-0023: package.json not JSON', () => {
 
 // --- ADR-0011: forge.audit runs zizmor on the committed workflows
 
-const forgeAdr = (gate: string, audit: string): Files => ({ 'ADR-0011-forge-and-ci.md': `  forge:\n    gate: ${gate}\n    audit: ${audit}` });
-const pinned = 'on: pull_request\npermissions: {}\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0\n        with:\n          persist-credentials: false\n      - run: echo hi\n';
+const forgeAdr = (gate: string, audit: string, integration = 'none'): Files => ({ 'ADR-0011-forge-and-ci.md': `  forge:\n    gate: ${gate}\n    audit: ${audit}\n    integration: ${integration}` });
+const pinned = 'on:\n  pull_request:\n  push:\n    branches: [main]\npermissions: {}\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0\n        with:\n          persist-credentials: false\n      - run: echo hi\n';
 const tagged = pinned.replace('@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0', '@v4');
 
 // A zizmor stand-in: logs its arguments, prints a version, exits $FAKE_ZIZMOR_EXIT.
@@ -1444,7 +1444,7 @@ test('ADR-0011: a zizmor finding fails the check', () => {
 });
 
 test('ADR-0011: leftover forge.review', () => {
-  const adrs = { 'ADR-0011-forge-and-ci.md': '  forge:\n    gate: blocking\n    audit: none\n    review: author' };
+  const adrs = { 'ADR-0011-forge-and-ci.md': '  forge:\n    gate: blocking\n    audit: none\n    integration: none\n    review: author' };
   const r = runWith(wired({ adrs, files: { '.github/workflows/ci.yml': pinned } }), ['ADR-0011'], { PATH: barePath });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /^ADR-0011: forge\.review moved to ADR-0022 review\.by; rule on it there and remove it here$/m);
@@ -1480,6 +1480,145 @@ test('ADR-0011: gate and audit both fail, both reported', () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /forge\.gate is blocking, but no tracked file matches/);
   assert.match(r.stderr, /forge\.audit is not set/);
+});
+
+// --- ADR-0011: forge.integration, in the repository and, in CI, in the default branch's rules
+
+const wf = (on: string, jobs = '  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n') => `on:\n${on}\npermissions: {}\njobs:\n${jobs}`;
+const queued = wf('  pull_request:\n  merge_group:');
+const codeql = (on: string) => wf(on, '  analyze:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: github/codeql-action/analyze@abc # v4\n');
+const integrate = (integration: string, files: Files, gate = 'blocking', extra: Files = {}) =>
+  wired({ adrs: { ...forgeAdr(gate, 'none', integration), ...extra }, files });
+// GITHUB_ACTIONS cleared: these tests run in CI, where it is true.
+const local11 = (cwd: string) => runWith(cwd, ['ADR-0011'], { GITHUB_ACTIONS: '' });
+function ci11(cwd: string, rules: object[]) {
+  const bin = join(cwd, '.fake-bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(cwd, '.rules.json'), JSON.stringify(rules));
+  writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncase "$2" in */rules/branches/*) cat "${join(cwd, '.rules.json')}";; *) echo main;; esac\n`, { mode: 0o755 });
+  return runWith(cwd, ['ADR-0011'], { PATH: [bin, barePath].join(':'), GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' });
+}
+const queueRule = (merge_method = 'SQUASH', grouping_strategy = 'ALLGREEN') => ({ type: 'merge_queue', parameters: { merge_method, grouping_strategy } });
+const requires = (strict: boolean, ...contexts: string[]) =>
+  ({ type: 'required_status_checks', parameters: { strict_required_status_checks_policy: strict, required_status_checks: contexts.map((context) => ({ context })) } });
+
+test('ADR-0011: integration not set', () => {
+  const r = local11(integrate('', { '.github/workflows/ci.yml': queued }));
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /forge\.integration is not set/);
+  assert.match(r.stdout, /forge\.audit is none, nothing to check/);
+  assert.match(r.stdout, /ruleset that makes the pipeline required is not verified/);
+});
+
+test('ADR-0011: integration unknown value', () => {
+  const r = local11(integrate('merge-queue', { '.github/workflows/ci.yml': queued }));
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /forge\.integration has an unknown value: merge-queue/);
+});
+
+test('ADR-0011: queue without a gate', () => {
+  const r = local11(integrate('queue', { '.github/workflows/ci.yml': queued }, 'informative'));
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /forge\.integration is queue, but queue requires forge\.gate: blocking, and forge\.gate is informative/);
+});
+
+test('ADR-0011: queue with no merge_group workflow', () => {
+  const r = local11(integrate('queue', { '.github/workflows/ci.yml': wf('  pull_request:') }));
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /no committed workflow runs on merge_group, so the queue would wait for checks that never run/);
+});
+
+test('ADR-0011: queue triggers read in flow and block-list forms', () => {
+  for (const ci of ['on: [pull_request, merge_group]\njobs:\n  test:\n    runs-on: x\n', 'on:\n  - pull_request\n  - merge_group\njobs:\n  test:\n    runs-on: x\n']) {
+    const r = local11(integrate('queue', { '.github/workflows/ci.yml': ci }));
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /forge\.integration is queue, \.github\/workflows\/ci\.yml run\(s\) on merge_group/);
+    assert.match(r.stdout, /^ADR-0011: ruleset not read outside CI$/m);
+  }
+});
+
+test('ADR-0011: CodeQL left out of the queue', () => {
+  const r = local11(integrate('queue', { '.github/workflows/ci.yml': queued, '.github/workflows/codeql.yml': codeql('  pull_request:') }));
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /\.github\/workflows\/codeql\.yml uploads code scanning results and does not run on merge_group/);
+  assert.equal(local11(integrate('queue', { '.github/workflows/codeql.yml': codeql('  pull_request:\n  merge_group:') })).status, 0);
+});
+
+test('ADR-0011: none with a push workflow', () => {
+  const r = local11(integrate('none', { '.github/workflows/ci.yml': wf('  push:\n    branches:\n      - main') }));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /forge\.integration is none, \.github\/workflows\/ci\.yml runs on a push to main/);
+});
+
+test('ADR-0011: none without a push workflow', () => {
+  const r = local11(integrate('none', { '.github/workflows/ci.yml': wf('  pull_request:'), '.github/workflows/b.yml': wf('  push:\n    branches: [release]') }));
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /no committed workflow runs on a push to main, so a broken main would go unseen/);
+});
+
+test('ADR-0011: none with no pipeline has nothing to check', () => {
+  const r = local11(integrate('none', {}, 'none'));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /forge\.integration is none, and forge\.gate is none: no pipeline, nothing to check/);
+});
+
+test('ADR-0011: up-to-date outside CI', () => {
+  const r = local11(integrate('up-to-date', { '.github/workflows/ci.yml': wf('  pull_request:') }));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ADR-0011: ruleset not read outside CI$/m);
+});
+
+test('ADR-0011: up-to-date strict in CI', () => {
+  const r = ci11(integrate('up-to-date', { '.github/workflows/ci.yml': wf('  pull_request:') }), [requires(true, 'test')]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /the required status checks on main are strict/);
+});
+
+test('ADR-0011: up-to-date not strict in CI', () => {
+  const dir = integrate('up-to-date', { '.github/workflows/ci.yml': wf('  pull_request:') });
+  const r = ci11(dir, [requires(false, 'test')]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /the required status checks on main are not strict, so a branch need not be up to date to merge/);
+  assert.match(ci11(dir, []).stderr, /no ruleset requires status checks on main/);
+});
+
+const squashing = branchingAdr('[feat, fix]');
+
+test('ADR-0011: queue ruleset complete in CI', () => {
+  const named = wf('  pull_request:\n  merge_group:', '  unit:\n    name: test\n    runs-on: x\n');
+  const r = ci11(integrate('queue', { '.github/workflows/ci.yml': named }, 'blocking', squashing), [queueRule(), requires(false, 'test', 'other-app')]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /the merge queue on main uses SQUASH and ALLGREEN/);
+  assert.match(r.stdout, /required check other-app comes from no committed job, not checked/);
+});
+
+test('ADR-0011: queue merges another way in CI', () => {
+  const r = ci11(integrate('queue', { '.github/workflows/ci.yml': queued }, 'blocking', squashing), [queueRule('MERGE')]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /merges with MERGE, where branching\.merge squash needs SQUASH/);
+});
+
+test('ADR-0011: HEADGREEN refused in CI', () => {
+  const r = ci11(integrate('queue', { '.github/workflows/ci.yml': queued }, 'blocking', squashing), [queueRule('SQUASH', 'HEADGREEN')]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /groups with HEADGREEN, so a pull request whose own checks fail could land; use ALLGREEN/);
+});
+
+test('ADR-0011: required check without merge_group in CI', () => {
+  const files = { '.github/workflows/ci.yml': wf('  pull_request:'), '.github/workflows/q.yml': wf('  merge_group:', '  other:\n    runs-on: x\n') };
+  const r = ci11(integrate('queue', files, 'blocking', squashing), [queueRule(), requires(false, 'test')]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /the required check test comes from \.github\/workflows\/ci\.yml, which does not run on merge_group/);
+});
+
+test('ADR-0011: no queue rule in CI, merge method not ruled', () => {
+  const dir = integrate('queue', { '.github/workflows/ci.yml': queued });
+  const r = ci11(dir, []);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /no ruleset requires a merge queue on main/);
+  const unruled = ci11(dir, [queueRule('REBASE')]);
+  assert.equal(unruled.status, 0, unruled.stderr);
+  assert.match(unruled.stdout, /no ADR-0009 in this repository, so the queue's merge method is not compared/);
 });
 
 // Against the real zizmor, when it is on the PATH.
