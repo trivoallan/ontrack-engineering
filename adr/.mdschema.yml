@@ -111,6 +111,11 @@ frontmatter:
     - { name: "traits.tools.manager", enum: [mise, aqua, script, none], optional: true }
     # ADR-0026
     - { name: "traits.agent.identity", enum: [maintainer, own], optional: true }
+    # ADR-0027
+    - { name: "traits.infrastructure.tool", type: string, optional: true }
+    - { name: "traits.infrastructure.source", type: string, optional: true }
+    - { name: "traits.infrastructure.state", type: string, optional: true }
+    - { name: "traits.infrastructure.apply", enum: [manual, merge], optional: true }
 structure:
   - heading:
       pattern: "^# .+"

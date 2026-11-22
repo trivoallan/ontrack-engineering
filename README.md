@@ -6,9 +6,9 @@
 
 **Stop copying your conventions from repo to repo.**
 
-26 decisions (commits, branching, delivery, supply chain, agent tooling)
+27 decisions (commits, branching, delivery, supply chain, agent tooling)
 that every one of your Python or TypeScript repositories on GitHub imports
-and overrules where it disagrees; 16 of them come with a check that runs in
+and overrules where it disagrees; 17 of them come with a check that runs in
 CI. When a decision changes, each repository is told, instead of drifting.
 
 ontrack-engineering is an [ontrack](https://github.com/trivoallan/ontrack) track:
@@ -23,7 +23,7 @@ convention at a time.
 | **Architecture** (0003, 0010) | A hexagonal core by default, where the domain depends on no I/O, so an agent writes and tests it without a running environment. The architecture is documented in [arc42](https://arc42.org/overview)'s twelve sections, with [C4](https://c4model.com/) diagrams generated from a [LikeC4](https://likec4.dev/) model kept as code | the twelve arc42 section files; the LikeC4 model files, if you chose them |
 | **Code** (0004, 0005, 0007, 0013, 0024) | Validation at every boundary (`zod` or `pydantic`), a test coverage target you set, and your own code scanned by CodeQL, its alerts blocking from `high` | a scan workflow sends its SARIF to code scanning (or keeps it as an artifact); the threshold, held by the ruleset, is not verified |
 | **Decisions & docs** (0001, 0002, 0008) | Decisions kept as ADRs, docs in one language under one root | each ruled ADR carries its ruling (status decided, no trait left empty, how-to-rule block gone), checked against the shipped `.mdschema.yml`; the docs tool and root exist |
-| **Delivery** (0011, 0012, 0023) | A pipeline designed once (stages, a blocking gate, a merge queue or up-to-date branches so the default branch holds what was tested, releases cut from tags) that your agent writes from the rules and that [zizmor](https://docs.zizmor.sh/) reads for what those rules forbid, and a licence others can reuse the code under | a workflow exists; zizmor finds no movable action reference, dangerous trigger, template injection or over-broad permission in the workflows; a queue's workflows run on `merge_group`, and in CI the ruleset holds the queue or the up-to-date rule; release-please runs in one; a Dockerfile if you ship a container; the root manifest declares the ruled licence and a licence file is committed |
+| **Delivery** (0011, 0012, 0023, 0027) | A pipeline designed once (stages, a blocking gate, a merge queue or up-to-date branches so the default branch holds what was tested, releases cut from tags) that your agent writes from the rules and that [zizmor](https://docs.zizmor.sh/) reads for what those rules forbid, a licence others can reuse the code under, and, where you provision, infrastructure declared in the repository and applied by a person, never by the agent on its own | a workflow exists; zizmor finds no movable action reference, dangerous trigger, template injection or over-broad permission in the workflows; a queue's workflows run on `merge_group`, and in CI the ruleset holds the queue or the up-to-date rule; release-please runs in one; a Dockerfile if you ship a container; the root manifest declares the ruled licence and a licence file is committed; infrastructure files and the provider lock file are committed, and no state file is |
 | **Supply chain** (0015, 0018, 0019, 0020, 0021, 0025) | Current practice, by name: gitleaks before every commit, dependencies admitted by a person with install scripts ignored, a CycloneDX SBOM scanned by Grype, SLSA Build Level 2 provenance, and the tools outside npm pinned by version and checksum in one place | gitleaks finds no secret on the branch; Dependabot is configured, and so is its automerge; the publishing workflow emits provenance; mise pins the tools your rulings name, and the checks run those, never a bin from `node_modules` |
 | **Workflow** (0006, 0009, 0014, 0016) | One convention for commits and branch names, refused at the gate instead of argued in review | the branch's commits pass commitlint; the branch name has an accepted prefix; OpenSpec uses the schema you chose |
 
@@ -59,6 +59,7 @@ doesn't fit your repository.
 - [ADR-0024](adr/ADR-0024-code-scanning.md) Code scanning
 - [ADR-0025](adr/ADR-0025-tools.md) Tools outside the package manager
 - [ADR-0026](adr/ADR-0026-agent-identity.md) Agent identity
+- [ADR-0027](adr/ADR-0027-infrastructure.md) Infrastructure
 
 ### Not covered
 
@@ -73,8 +74,7 @@ ontrack-engineering decides nothing about:
 - forges other than GitHub ([ADR-0011](adr/ADR-0011-forge-and-ci.md));
 - the workflow files themselves: none ship, your agent writes them from the
   rules;
-- infrastructure as code, hosting and operations (logging, monitoring,
-  incidents);
+- hosting and operations (logging, monitoring, incidents);
 - ownership (`CODEOWNERS`):
   [ADR-0022](adr/ADR-0022-review-and-merge.md) decides who reviews and
   merges, not who owns which path.

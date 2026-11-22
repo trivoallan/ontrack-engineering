@@ -1912,3 +1912,62 @@ test('installed, another ADR is named <namespace>/<number>', () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /no aliased\/ADR-0018 in docs\/adr\/\*\/ rules dependencies\.updater/);
 });
+
+// ADR-0027: two rows, a relative source, and no tracked state file.
+const infra = (tool = 'terraform', source = 'infrastructure/terraform') =>
+  ({ 'ADR-0027-infrastructure.md': `  infrastructure:\n    tool: ${tool}\n    source: ${source}\n    state: terraform-cloud\n    apply: manual` });
+const tf = { 'infrastructure/terraform/main.tf': 'x\n', 'infrastructure/terraform/.terraform.lock.hcl': 'x\n' };
+
+test('ADR-0027: ruled and wired', () => {
+  const r = run(wired({ adrs: infra(), files: tf }), 'ADR-0027');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /infrastructure\.tool is terraform, found infrastructure\/terraform\/\.terraform\.lock\.hcl/);
+  assert.match(r.stdout, /infrastructure\.source is infrastructure\/terraform, found infrastructure\/terraform\//);
+  assert.match(r.stdout, /infrastructure\.state is terraform-cloud, nothing to check/);
+  assert.match(r.stdout, /infrastructure\.apply is manual, nothing to check/);
+  assert.match(r.stdout, /^ADR-0027: no state file is tracked$/m);
+});
+
+test('ADR-0027: opentofu lock file, another tool has nothing to check', () => {
+  assert.equal(run(wired({ adrs: infra('opentofu'), files: tf }), 'ADR-0027').status, 0);
+  const r = run(wired({ adrs: infra('pulumi', 'infra'), files: { 'infra/Pulumi.yaml': 'x\n' } }), 'ADR-0027');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /infrastructure\.tool is pulumi, nothing to check/);
+});
+
+test('ADR-0027: missing lock file', () => {
+  const r = run(wired({ adrs: infra(), files: { 'infrastructure/terraform/main.tf': 'x\n' } }), 'ADR-0027');
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /infrastructure\.tool is terraform, but no tracked file matches \*\*\/\.terraform\.lock\.hcl/);
+});
+
+test('ADR-0027: state file tracked', () => {
+  const r = run(wired({ adrs: infra(), files: { ...tf, 'infrastructure/terraform/terraform.tfstate': '{}\n' } }), 'ADR-0027');
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /^ADR-0027: infrastructure\/terraform\/terraform\.tfstate is tracked, but the state does not enter the repository/m);
+  assert.match(r.stderr, /ADR-0015/);
+});
+
+test('ADR-0027: state backup tracked with another tool', () => {
+  const r = run(wired({ adrs: infra('pulumi', 'infra'), files: { 'infra/Pulumi.yaml': 'x\n', 'old/terraform.tfstate.backup': '{}\n' } }), 'ADR-0027');
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /old\/terraform\.tfstate\.backup is tracked/);
+});
+
+test('ADR-0027: untracked state file does not fail', () => {
+  const r = run(wired({ adrs: infra(), files: tf, untracked: { 'infrastructure/terraform/terraform.tfstate': '{}\n' } }), 'ADR-0027');
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('ADR-0027: source is a URL', () => {
+  const r = run(wired({ adrs: infra('terraform', 'https://github.com/acme/infra'), files: tf }), 'ADR-0027');
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /infrastructure\.source is https:\/\/github\.com\/acme\/infra, but it is not a relative path/);
+});
+
+test('ADR-0027: several faults in one run', () => {
+  const r = run(wired({ adrs: infra('terraform', 'nowhere'), files: { ...tf, 'a.tfstate': '{}\n' } }), 'ADR-0027');
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /infrastructure\.source is nowhere, but no tracked file under nowhere\//);
+  assert.match(r.stderr, /a\.tfstate is tracked/);
+});

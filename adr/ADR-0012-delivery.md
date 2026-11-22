@@ -47,7 +47,8 @@ with its changelog (`delivery.release_tool`) and the notes that come with it
 (`delivery.release_notes`). Deploying puts something in
 service (each environment's trigger). A repository can do one without the
 other: a library releases and never deploys; a service can deploy every
-merge without naming versions.
+merge without naming versions. Provisioning what a service runs on is a
+third act, ruled in [ADR-0027](ADR-0027-infrastructure.md).
 
 **Semantic versioning is not ruled here**: `feat` gives a minor
 version, `fix` and `perf` a patch, a breaking change a major. The commit
