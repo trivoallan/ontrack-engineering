@@ -169,6 +169,8 @@ ontrack-engineering SHALL ship these rows. Workflows are the tracked files match
 | ADR-0021 | `supply_chain.build_level = 1`, `2` or `3` | contains | a workflow holds `actions/attest-build-provenance`, `--provenance` or `pypa/gh-action-pypi-publish` |
 | ADR-0024 | `code_scanning.tool = codeql` | contains | a workflow holds `github/codeql-action/analyze` |
 | ADR-0024 | `code_scanning.tool = <any other value but none>` | contains all | one workflow holds the value, and `github/codeql-action/upload-sarif` or `actions/upload-artifact` (ADR-0024 rule 2: the SARIF goes to code scanning, or stays a job artifact where the plan does not allow the upload) |
+| ADR-0027 | `infrastructure.source = <relative path>` | path | a file under that path |
+| ADR-0027 | `infrastructure.tool = terraform` or `opentofu` | exists | a file named `.terraform.lock.hcl`, in any folder |
 
 The arc42 row looks under `docs/architecture/arc42/` whatever ADR-0008's
 `docs.root` says: the architecture document does not move with the user
@@ -178,7 +180,9 @@ ADR-0011 line SHALL say that the ruleset requiring the pipeline is not
 verified. With `dependencies.updater: renovate`, `dependencies.automerge` has
 no row. A `contains all` row passes only when a single file holds, for each
 of its lists, one of that list's strings. `code_scanning.fail_on` has no row: the threshold lives in the
-ruleset and the workflow, which the check does not read.
+ruleset and the workflow, which the check does not read. `infrastructure.state`
+and `infrastructure.apply` have no row: the backend and whoever applies are
+outside the repository's tracked files.
 
 #### Scenario: arc42 under another root
 - **WHEN** ADR-0008 has `docs.root: site/` and ADR-0010 has `architecture.document: arc42`
@@ -227,6 +231,14 @@ ruleset and the workflow, which the check does not read.
 #### Scenario: Grype's upload does not count
 - **WHEN** ADR-0024 has `code_scanning.tool: semgrep`, the only `upload-sarif` is in a workflow running Grype, and semgrep runs in another workflow
 - **THEN** the check exits non-zero
+
+#### Scenario: Provider lock file tracked
+- **WHEN** ADR-0027 has `infrastructure.tool: opentofu` and the repository tracks `infrastructure/terraform/.terraform.lock.hcl`
+- **THEN** the `infrastructure.tool` row passes and names that file
+
+#### Scenario: Another provisioning tool
+- **WHEN** ADR-0027 has `infrastructure.tool: pulumi`
+- **THEN** the output says `infrastructure.tool` has nothing to check
 
 ### Requirement: Repository tools
 A check that runs a tool other than commitlint SHALL look the tool up by its
@@ -1053,3 +1065,39 @@ that are not JSON, it SHALL fail and say why.
 #### Scenario: Outside CI
 - **WHEN** the check runs outside GitHub Actions with `forge.integration: up-to-date`
 - **THEN** it prints `ADR-0011: ruleset not read outside CI` and passes `forge.integration`
+
+### Requirement: ADR-0027 check
+`ontrack-engineering-check ADR-0027` SHALL apply its `infrastructure.source`
+and `infrastructure.tool` rows, and SHALL also refuse a tracked state file.
+One run SHALL report every fault.
+- When `infrastructure.source` holds `://`, it SHALL fail and say that the value is a relative path, and that infrastructure declared in another repository is ruled there.
+- When a tracked file, in any folder, is named `*.tfstate` or `*.tfstate.backup`, it SHALL fail, name each such file, and say that the state does not enter the repository (ADR-0027 rule 1) and that a state file already pushed holds secrets to revoke (ADR-0015).
+- When no such file is tracked, it SHALL print that no state file is tracked.
+
+The refusal SHALL apply whatever the four keys hold. It SHALL look at
+tracked files only, and SHALL NOT read a file's content. The check MUST NOT
+create, modify or delete any file in the repository.
+
+#### Scenario: Ruled and wired
+- **WHEN** ADR-0027 has `tool: terraform` and `source: infrastructure/terraform`, and the repository tracks `infrastructure/terraform/main.tf` and `infrastructure/terraform/.terraform.lock.hcl` and no state file
+- **THEN** the check exits `0`, names a file for each of the two keys, and says no state file is tracked
+
+#### Scenario: State file tracked
+- **WHEN** the repository tracks `infrastructure/terraform/terraform.tfstate`
+- **THEN** the check exits non-zero and names that file
+
+#### Scenario: State backup tracked with another tool
+- **WHEN** ADR-0027 has `infrastructure.tool: pulumi` and the repository tracks `old/terraform.tfstate.backup`
+- **THEN** the check exits non-zero and names that file
+
+#### Scenario: State file ignored and untracked
+- **WHEN** `terraform.tfstate` exists in the working tree but is not tracked
+- **THEN** the check does not fail on it
+
+#### Scenario: Source is a URL
+- **WHEN** ADR-0027 has `infrastructure.source: https://github.com/acme/infra`
+- **THEN** the check exits non-zero and says the value is a relative path
+
+#### Scenario: Several faults in one run
+- **WHEN** `infrastructure.source` names a folder with no tracked file and a state file is tracked elsewhere
+- **THEN** the check exits non-zero and its output holds both faults

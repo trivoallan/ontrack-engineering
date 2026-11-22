@@ -60,7 +60,9 @@ commit** that carries one anyway, because storage is a habit and habits
 fail.
 
 **Not concerned:** the secrets your CI uses. They live in the forge, under
-the rules of [ADR-0011](ADR-0011-forge-and-ci.md).
+the rules of [ADR-0011](ADR-0011-forge-and-ci.md). The state file of a
+provisioning tool holds secrets too:
+[ADR-0027](ADR-0027-infrastructure.md) keeps it out of the repository.
 
 ## Decision
 

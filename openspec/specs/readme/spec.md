@@ -86,6 +86,10 @@ section SHALL NOT promise that a topic will be covered later.
 - **WHEN** the section's item on code review is read
 - **THEN** it lists ownership (`CODEOWNERS`) only, and links to ADR-0022, which names it as outside what it covers
 
+#### Scenario: Infrastructure as code covered
+- **WHEN** the section is read
+- **THEN** it does not list infrastructure as code, which ADR-0027 decides, and still lists hosting and operations
+
 ### Requirement: README shows one ADR excerpt
 The README SHALL show a short excerpt of one shipped ADR: what it proposes, its
 recommended value and its `traits:` block. The excerpt SHALL be taken from

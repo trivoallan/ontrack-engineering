@@ -254,12 +254,14 @@ type Row = { note?: string } & (
   | { contains: { in: string[]; any: string[] } }
   | { containsAll: { in: string[]; all: string[][] } }
   | { path: string }
+  | { fail: string }
 );
 // ctx.traits holds the entries of the ADR validated so far: { <group>: { <key>: value } }.
 type Entry = { group: string; key: string; row: (value: string, ctx: { root: string; traits: Record<string, Record<string, string>> }) => Row | null };
 
 // { found } or { fail }, for one row against the tracked files.
 function evaluate(row: Row, files: string[], root: string): { found?: string; fail?: string } {
+  if ('fail' in row) return row; // the value itself is at fault, whatever is tracked
   if ('exists' in row) {
     const found = [];
     const missing = [];
@@ -1190,6 +1192,26 @@ function defaultBranch(root: string): string {
   return r.status === 0 && r.stdout.trim() ? r.stdout.trim().replace(/^origin\//, '') : 'main';
 }
 
+// ADR-0027: its rows, then rule 1, which holds whatever the keys say: no tracked state file.
+// ponytail: Terraform and OpenTofu state names only; add another tool's when a repository uses one.
+const INFRA_ROWS: Entry[] = [
+  { group: 'infrastructure', key: 'tool', row: (v) => (v === 'terraform' || v === 'opentofu' ? { exists: [['**/.terraform.lock.hcl']] } : null) },
+  { group: 'infrastructure', key: 'source', row: (v) => (v.includes('://')
+    ? { fail: 'it is not a relative path: infrastructure declared in another repository is ruled there' }
+    : { path: v }) },
+  // The backend and whoever applies are outside the tracked files: validated, not wired.
+  { group: 'infrastructure', key: 'state', row: () => null },
+  { group: 'infrastructure', key: 'apply', row: () => null },
+];
+
+function infrastructure(root: string, file: string, opts: Options): number {
+  const wired = wiring('ADR-0027', INFRA_ROWS)(root, file, opts);
+  const states = matching(tracked(root), ['**/*.tfstate', '**/*.tfstate.backup']);
+  for (const f of states) console.error(`ADR-0027: ${f} is tracked, but the state does not enter the repository (rule 1); remove it from the index, and revoke the secrets it holds (${ref('ADR-0015')})`);
+  if (!states.length) console.log('ADR-0027: no state file is tracked');
+  return wired === 0 && !states.length ? 0 : 1;
+}
+
 function docs(root: string, file: string, opts: Options): number {
   const wired = wiring('ADR-0008', DOCS_ROWS)(root, file, opts);
   return channels(root, file) && wired === 0 ? 0 : 1;
@@ -1249,6 +1271,7 @@ const CHECKS: Record<string, Check> = {
   'ADR-0017': agentTooling,
   'ADR-0022': review,
   'ADR-0008': docs,
+  'ADR-0027': infrastructure,
   'ADR-0023': license,
   'ADR-0006': commits,
   'ADR-0009': branching,
