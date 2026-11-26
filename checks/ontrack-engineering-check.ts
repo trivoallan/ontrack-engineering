@@ -122,7 +122,7 @@ function adrFiles(root: string): string[] {
 
 // The accepted ADR whose `supersedes:` names `file`, as ontrack reads it: a plain
 // name (`adr:` value or file name) within the same directory, `<dir>/<name>` across.
-function supersededBy(root: string, file: string): string | undefined {
+function supersededBy(root: string, file: string): { name: string; file: string } | undefined {
   const dir = basename(dirname(file));
   const names = new Set([basename(file, '.md'), frontKey(readFileSync(file, 'utf8'), 'adr')].filter((n) => typeof n === 'string' && n));
   for (const other of adrFiles(root)) {
@@ -135,7 +135,7 @@ function supersededBy(root: string, file: string): string | undefined {
       const e = entry.replace(/\.md$/, '');
       const cut = e.lastIndexOf('/');
       const [d, n] = cut === -1 ? [otherDir, e] : [e.slice(0, cut), e.slice(cut + 1)];
-      if (d === dir && names.has(n)) return `${otherDir ? `${otherDir}/` : ''}${basename(other, '.md')}`;
+      if (d === dir && names.has(n)) return { name: `${otherDir ? `${otherDir}/` : ''}${basename(other, '.md')}`, file: other };
     }
   }
   return undefined;
@@ -447,9 +447,10 @@ const TOOLS: [adr: string, group: string, key: string, prefixes: Record<string, 
   ['ADR-0018', 'dependencies', 'updater', { dependabot: 'dependabot/', renovate: 'renovate/' }],
 ];
 
-// What ADR `adr` rules for `key`, counted only when its copy is accepted and no
-// accepted ADR supersedes it; `why` says otherwise. `found` is false when no file
-// matches (several files still throw).
+// What ADR `adr` rules for `key`, counted only when its copy is accepted. When an
+// accepted ADR supersedes it, the ruling is read from the last ADR of that chain,
+// which must rule `group.key` itself; `why` says otherwise. `found` is false when no
+// file matches (several files still throw).
 function toolRuling(root: string, adr: string, group: string, key: string): { found: boolean; value?: unknown; why?: string } {
   let file: string;
   try {
@@ -461,9 +462,17 @@ function toolRuling(root: string, adr: string, group: string, key: string): { fo
   const text = readFileSync(file, 'utf8');
   const status = frontKey(text, 'status');
   if (status !== 'accepted') return { found: true, why: `${ref(adr)} is ${status || 'without a status'}, not accepted` };
-  const by = supersededBy(root, file);
-  if (by) return { found: true, why: `${ref(adr)} is superseded by ${by}` };
-  return { found: true, value: readTraits(text, group)?.[key] };
+  let current = { file, text };
+  let last: string | undefined;
+  const seen = new Set([file]);
+  for (let by = supersededBy(root, file); by && !seen.has(by.file); by = supersededBy(root, by.file)) {
+    seen.add(by.file);
+    last = by.name;
+    current = { file: by.file, text: readFileSync(by.file, 'utf8') };
+  }
+  const value = readTraits(current.text, group)?.[key];
+  if (last && value === undefined) return { found: true, why: `${ref(adr)} is superseded by ${last}, which does not rule ${group}.${key}` };
+  return { found: true, value };
 }
 
 function branching(root: string, file: string, { branch }: Options): number {

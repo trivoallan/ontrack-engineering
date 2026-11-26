@@ -1714,7 +1714,33 @@ test('ruling: a local ADR supersedes the package\'s', () => {
   const files = { 'docs/adr/local/ADR-0003-updates.md': adrText('ADR-0003', 'accepted', '  updates:\n    bot: none', 'supersedes: [trivoallan/ADR-0018-dependencies]\n') };
   const r = runWith(branched({ adrs: { ...branchingAdr('[feat]'), ...deps('dependabot') }, files }), ['ADR-0009', '--branch', 'dependabot/x']);
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /not exempt: ADR-0018 is superseded by local\/ADR-0003-updates/);
+  assert.match(r.stderr, /not exempt: ADR-0018 is superseded by local\/ADR-0003-updates, which does not rule dependencies\.updater/);
+});
+
+test('ruling: read from the local ADR that supersedes the package\'s', () => {
+  const files = { 'docs/adr/local/ADR-0003-updates.md': adrText('ADR-0003', 'accepted', '  dependencies:\n    updater: dependabot', 'supersedes: [trivoallan/ADR-0018-dependencies]\n') };
+  const r = runWith(branched({ adrs: { ...branchingAdr('[feat]'), ...deps('renovate') }, files }), ['ADR-0009', '--branch', 'dependabot/x']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /dependabot\/x is a tool branch/);
+});
+
+test('ruling: read from the last ADR of a supersession chain', () => {
+  const files = {
+    'docs/adr/local/ADR-0003-a.md': adrText('ADR-0003', 'accepted', '  dependencies:\n    updater: renovate', 'supersedes: [trivoallan/ADR-0018-dependencies]\n'),
+    'docs/adr/local/ADR-0004-b.md': adrText('ADR-0004', 'accepted', '  dependencies:\n    updater: dependabot', 'supersedes: [ADR-0003]\n'),
+  };
+  const r = runWith(branched({ adrs: { ...branchingAdr('[feat]'), ...deps('renovate') }, files }), ['ADR-0009', '--branch', 'dependabot/x']);
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('ruling: a supersession cycle ends', () => {
+  const files = {
+    'docs/adr/local/ADR-0003-a.md': adrText('ADR-0003', 'accepted', '  x:\n    y: z', 'supersedes: [trivoallan/ADR-0018-dependencies, ADR-0004]\n'),
+    'docs/adr/local/ADR-0004-b.md': adrText('ADR-0004', 'accepted', '  x:\n    y: z', 'supersedes: [ADR-0003]\n'),
+  };
+  const r = runWith(branched({ adrs: { ...branchingAdr('[feat]'), ...deps('dependabot') }, files }), ['ADR-0009', '--branch', 'dependabot/x']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /does not rule dependencies\.updater/);
 });
 
 test('ruling: a block list, by adr value, from the same directory', () => {
@@ -1822,7 +1848,7 @@ test('ADR-0025: a superseded ADR names no tool', () => {
   fakeMise(dir);
   const r = runWith(dir, ['ADR-0025'], { PATH: onTools(dir) });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /ADR-0015 is superseded by local\/ADR-0003-secrets, names no tool here/);
+  assert.match(r.stdout, /ADR-0015 is superseded by local\/ADR-0003-secrets, which does not rule secrets\.\w+, names no tool here/);
 });
 
 test('ADR-0025: script lists without verifying', () => {
