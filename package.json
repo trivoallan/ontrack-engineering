@@ -57,7 +57,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
-    "@fission-ai/openspec": "1.13.1",
+    "@fission-ai/openspec": "2.2.0",
     "@trivoallan/ontrack": "^0.6.0",
     "@types/node": "22.20.5",
     "trivoallan": "npm:@trivoallan/ontrack-engineering@^0.6.0",
